@@ -1,5 +1,5 @@
 ---
-title: "TermPaper"
+title: "US Wildfires Analysis"
 author: "Chris Boyle"
 date: "20/10/2020"
 output: html_document
