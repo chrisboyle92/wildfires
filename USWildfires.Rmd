@@ -1,0 +1,954 @@
+---
+title: "TermPaper"
+author: "Chris Boyle"
+date: "20/10/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+## Load Applicable Libraries
+
+```{r}
+
+library(tidyverse)
+library(readr)
+library(Hmisc)
+library(ggpubr)
+library(MASS)
+library(scales)
+library(cowplot)
+library(corrr)
+library(dplyr)
+library(leaflet)
+library(leaflet.extras)
+library(wesanderson)
+library(ggcorrplot)
+library(DMwR)
+library(purrr)
+library(ggplot2)
+library(xts)
+library(ggfortify)
+library(ggthemes)
+library(maps)
+library(mapdata)
+library(leaflet)
+library(glmnet)
+library(pROC)
+library(cvAUC)
+library(bigmemory)
+library(tree)
+library(randomForest)
+library(libcoin)
+library(partykit)
+library(caret)
+
+
+```
+
+```{r}
+## Run in Support Function
+
+support<- function(x, tr = 10e-6) {
+  m<- rep(0, length(x))
+  for (i in 1:length(x)) if( abs(x[i])> tr ) m[i]<- i
+  m <- m[m>0]
+  m
+}
+
+```
+
+## Load the Data from the SQLite Engine File
+
+```{r}
+
+library(RSQLite)
+
+con <- dbConnect(drv=RSQLite::SQLite(), dbname="FPA_FOD_20170508.sqlite")
+
+Fires <- dbReadTable(con, "Fires")
+
+dbDisconnect(con)
+
+```
+
+## Investigate Dataset
+
+```{r}
+FiresDF <- as.data.frame(Fires)
+
+## Add a Burn Time Variable ##
+FiresDF$BURN_TIME <- as.numeric(FiresDF$CONT_DATE - FiresDF$DISCOVERY_DATE)
+
+## Make an is Big Fire Dummy for greater then 1 Acre ##
+FiresDF$BIG_FIRE <- as.numeric(FiresDF$FIRE_SIZE)>1  +0
+FiresDF$BIG_FIRE <- sapply(FiresDF$BIG_FIRE, as.numeric)
+
+## Make an aggregated 'Man Made' cause ##
+FiresDF$HUMAN_CAUSE <- as.factor(ifelse(FiresDF$STAT_CAUSE_CODE %in% c(2, 3, 4, 5, 7, 8, 10), 1, 0))
+
+unique(FiresDF$STAT_CAUSE_DESCR)
+                                 
+## Make a Discovery Hour Variable for Time ##
+FiresDF$DISCOVERY_HOUR <- substr(FiresDF$DISCOVERY_TIME, start = 1, stop = 2)
+
+## Make a Containtment Hour Variable for Time ##
+FiresDF$CONT_HOUR <- substr(FiresDF$CONT_TIME, start = 1, stop = 2)
+
+## Make a Big Fire Dataframe ##
+BigFiresDF <- FiresDF %>%
+  filter(BIG_FIRE == 1)
+
+## Make a Big Fire Dataframe ##
+HumanFiresDF <- FiresDF %>%
+  filter(HUMAN_CAUSE == 1)
+
+## List Causes Descriptions and their Code for Reference ##
+CauseDF <- FiresDF %>%
+  group_by(STAT_CAUSE_CODE) %>%
+  summarise(STAT_CAUSE_DESCR)
+CauseDF
+```
+
+
+```{r}
+
+ggplot(BigFiresDF, mapping = aes(log(FIRE_SIZE))) + geom_density( fill = "orange") + labs(y = 'Density', x = 'Log of Fire Size', title = 'Density Plot of Log of Fire Size')
+
+```
+
+```{r}
+
+ggplot(BigFiresDF, mapping = aes(log(BURN_TIME))) + geom_density( fill = "orange") + labs(y = 'Density', x = 'Log of Burn Time', title = 'Density Plot of Log of Burn Time')
+
+```
+
+```{r}
+## Fires by Day of Year Discovered ##
+
+ggplot(FiresDF, mapping = aes(DISCOVERY_DOY)) + geom_histogram(stat = "count", fill = "orange") + labs(x = 'Numeric Day of Year', y = 'Count of Fires', title = 'Number of Fires by Day of Year Discovered')
+
+```
+
+```{r}
+## Big Fires by Day of Year Discovered ##
+
+ggplot(BigFiresDF, mapping = aes(DISCOVERY_DOY)) + geom_histogram(stat = "count", fill = "DarkRed") + labs(x = 'Numeric Day of Year', y = 'Count of Fires', title = 'Number of Big Fires by Day of Year Discovered')
+
+```
+
+```{r}
+## Human Fires by Day of Year Discovered ##
+
+ggplot(HumanFiresDF, mapping = aes(DISCOVERY_DOY)) + geom_histogram(stat = "count", fill = "red") + labs(x = 'Numeric Day of Year', y = 'Count of Fires', title = 'Number of Human Fires by Day of Year Discovered')
+
+```
+
+```{r}
+## Fires by Hour of Day Discovered ##
+
+ggplot(data = subset(FiresDF, !is.na(FiresDF$DISCOVERY_HOUR)), mapping = aes(DISCOVERY_HOUR)) + geom_histogram(stat = "count", fill = "orange") + labs(x = 'Hour of Day', y = 'Count of Fires', title = 'Number of Fires by Hour of Day Discovered')
+
+```
+
+```{r}
+## Big Fires by Hour of Day Discovered ##
+
+ggplot(data = subset(BigFiresDF, !is.na(BigFiresDF$DISCOVERY_HOUR)), mapping = aes(DISCOVERY_HOUR)) + geom_histogram(stat = "count", fill = "DarkRed") + labs(x = 'Hour of Day', y = 'Count of Fires', title = 'Number of Big Fires by Hour of Day Discovered')
+
+```
+
+```{r}
+## Human Fires by Hour of Day Discovered ##
+
+ggplot(data = subset(HumanFiresDF, !is.na(HumanFiresDF$DISCOVERY_HOUR)), mapping = aes(DISCOVERY_HOUR)) + geom_histogram(stat = "count", fill = "red") + labs(x = 'Hour of Day', y = 'Count of Fires', title = 'Number of Fires by Hour of Day Discovered')
+
+```
+
+```{r}
+## Fires by Hour of Day Contained ##
+
+ggplot(data = subset(FiresDF, !is.na(FiresDF$CONT_HOUR)), mapping = aes(CONT_HOUR)) + geom_histogram(stat = "count", fill = "orange") + labs(x = 'Hour of Day', y = 'Count of Fires', title = 'Number of Fires by Hour of Day Contained')
+
+```
+
+```{r}
+## Big Fires by Hour of Day Contained ##
+
+ggplot(data = subset(BigFiresDF, !is.na(BigFiresDF$CONT_HOUR)), mapping = aes(CONT_HOUR)) + geom_histogram(stat = "count", fill = "DarkRed") + labs(x = 'Hour of Day', y = 'Count of Fires', title = 'Number of Big Fires by Hour of Day Contained')
+
+```
+
+```{r} 
+## Number of Fire State ##
+
+ggplot(FiresDF, mapping = aes(STATE)) + geom_histogram(stat = "Count", fill = "orange") + coord_flip() + theme(axis.text=element_text(size=6),text=element_text(size=10)) + labs(x = 'State', y = 'Total Fires', title = 'Number of Fires By State')
+
+```
+
+```{r} 
+## Number of Big Fires by State ##
+
+ggplot(BigFiresDF, mapping = aes(STATE)) + geom_histogram(stat = "Count", fill = "DarkRed") + coord_flip() + theme(axis.text=element_text(size=6),text=element_text(size=10)) + labs(x = 'State', y = 'Total Fires', title = 'Number of Big Fires By State')
+
+```
+
+```{r} 
+## Number of Human Fires by State ##
+
+ggplot(HumanFiresDF, mapping = aes(STATE)) + geom_histogram(stat = "Count", fill = "red") + coord_flip() + theme(axis.text=element_text(size=6),text=element_text(size=10)) + labs(x = 'State', y = 'Total Fires', title = 'Number of Fires By State')
+
+```
+
+```{r}
+## Fires By Owner ##
+
+ggplot(FiresDF, mapping = aes(OWNER_DESCR)) + geom_histogram(stat = "count", fill = "orange") + coord_flip() + labs(x = 'Owner', y = 'Count of Fires', title = 'Total Fires By Owner')
+
+```
+
+```{r}
+## Big Fires By Owner ##
+
+ggplot(BigFiresDF, mapping = aes(OWNER_DESCR)) + geom_histogram(stat = "count", fill = "DarkRed") + coord_flip() + labs(x = 'Owner', y = 'Count of Fires', title = 'Total Big Fires By Owner')
+
+```
+
+```{r}
+## Number of Fires by Cause ##
+
+ggplot(FiresDF, mapping = aes(STAT_CAUSE_DESCR)) + geom_histogram(stat = "count", fill = "orange") + coord_flip() + labs(x = 'Cause', y = 'Count of Fires', title = 'Number of Fires by Cause')
+
+```
+
+```{r}
+## Number of Big Fires by Cause ##
+
+ggplot(BigFiresDF, mapping = aes(STAT_CAUSE_DESCR)) + geom_histogram(stat = "count", fill = "DarkRed") + coord_flip() + labs(x = 'Cause', y = 'Count of Fires', title = 'Number of Big Fires by Cause')
+
+```
+
+```{r}
+
+## Number of Fires by Man Made or Other (Excl. Missing/Undefined) ##
+
+FiresDF %>% filter(STAT_CAUSE_CODE != 13) %>%
+ggplot(FiresDF, mapping = aes(HUMAN_CAUSE)) + geom_histogram(stat = "count", fill = "orange") + coord_flip() + labs(x = 'Human Cause', y = 'Count of Fires', title = 'Number of Fires by Cause')
+
+```
+
+```{r}
+
+## Number of Fires by Man Made or Other (Excl. Missing/Undefined) ##
+
+BigFiresDF %>% filter(STAT_CAUSE_CODE != 13) %>%
+ggplot(BigFiresDF, mapping = aes(HUMAN_CAUSE)) + geom_histogram(stat = "count", fill = "darkred") + coord_flip() + labs(x = 'Cause', y = 'Count of Fires', title = 'Number of Big Fires by Cause')
+
+```
+
+```{r}
+## Fires by Class Size ##
+
+ggplot(FiresDF, mapping = aes(FIRE_SIZE_CLASS)) + geom_histogram(stat = "count", fill = "orange") + labs(x = 'Fires Size (Class)', y = 'Number of Fires', title = 'Number of Fires by Class Size')
+
+```
+
+```{r}
+## Big Fires by Class Size ##
+
+ggplot(BigFiresDF, mapping = aes(FIRE_SIZE_CLASS)) + geom_histogram(stat = "count", fill = "darkred") + labs(x = 'Fires Size (Class)', y = 'Number of Fires', title = 'Number of Big Fires by Class Size')
+
+```
+
+
+```{r}
+## Fires by Class Size ##
+
+ggplot(HumanFiresDF, mapping = aes(FIRE_SIZE_CLASS)) + geom_histogram(stat = "count", fill = "red") + labs(x = 'Fires Size (Class)', y = 'Number of Fires', title = 'Number of Fires by Class Size')
+
+```
+
+```{r}
+## Number of Fires By Year ##
+
+FiresDF %>% 
+    group_by(FIRE_YEAR) %>%
+    summarise(n_fires = n()) %>%
+    ggplot(aes(x = FIRE_YEAR, y = n_fires/1000)) + 
+    geom_bar(stat = 'identity', fill = 'orange') +
+    geom_smooth(method = 'lm', se = FALSE, linetype = 'dashed', size = 0.4, color = 'black') + 
+    labs(x = '', y = 'Number of wildfires (thousands)', title = 'US Wildfires by Year')
+
+```
+
+```{r}
+## Number of Big Fires By Year ##
+
+BigFiresDF %>% 
+    group_by(FIRE_YEAR) %>%
+    summarise(n_fires = n()) %>%
+    ggplot(aes(x = FIRE_YEAR, y = n_fires/1000)) + 
+    geom_bar(stat = 'identity', fill = 'orange') +
+    geom_smooth(method = 'lm', se = FALSE, linetype = 'dashed', size = 0.4, color = 'black') + 
+    labs(x = '', y = 'Number of wildfires (thousands)', title = 'US Wildfires by Year')
+
+```
+
+```{r}
+## Number of Fires By Class ##
+
+size_classes <- c('A' = '0-0.99', 'B' = '1.0-9.9', 'C' = '10.0-99.9', 'D' = '100-299', 'E' = '300-999','F' = '1000-4999', 'G' = '5000+')
+
+FiresDF %>% 
+    group_by(FIRE_SIZE_CLASS) %>%
+    summarise(n = n()) %>%
+    mutate(FIRE_SIZE_CLASS = size_classes[FIRE_SIZE_CLASS]) %>%
+    ggplot(aes(x = FIRE_SIZE_CLASS, y= n)) +
+    geom_bar(stat = 'identity', fill = 'Orange') +
+    labs(x = 'Fire size (acres)', y = 'Number of fires', title = 'Number of Wildfires by Size Class')
+
+```
+
+```{r}
+## Log Number of Fires By Class ##
+
+FiresDF %>% 
+    group_by(FIRE_SIZE_CLASS) %>%
+    summarise(n = n()) %>%
+    mutate(FIRE_SIZE_CLASS = size_classes[FIRE_SIZE_CLASS]) %>%
+    ggplot(aes(x = FIRE_SIZE_CLASS, y= log(n))) +
+    geom_bar(stat = 'identity', fill = 'Orange') +
+    labs(x = 'Fire size (acres)', y = 'Log Number of fires', title = 'Number of Wildfires by Size Class')
+
+```
+
+```{r}
+## Number of Big Fires By Class ##
+
+size_classes <- c('A' = '0-0.99', 'B' = '1.0-9.9', 'C' = '10.0-99.9', 'D' = '100-299', 'E' = '300-999','F' = '1000-4999', 'G' = '5000+')
+
+BigFiresDF %>% 
+    group_by(FIRE_SIZE_CLASS) %>%
+    summarise(n = n()) %>%
+    mutate(FIRE_SIZE_CLASS = size_classes[FIRE_SIZE_CLASS]) %>%
+    ggplot(aes(x = FIRE_SIZE_CLASS, y= n)) +
+    geom_bar(stat = 'identity', fill = 'darkred') +
+    labs(x = 'Fire size (acres)', y = 'Number of fires', title = 'Number of big fires by Size Class')
+
+```
+
+```{r}
+## Log Number of Big Fires By Class ##
+
+BigFiresDF %>% 
+    group_by(FIRE_SIZE_CLASS) %>%
+    summarise(n = n()) %>%
+    mutate(FIRE_SIZE_CLASS = size_classes[FIRE_SIZE_CLASS]) %>%
+    ggplot(aes(x = FIRE_SIZE_CLASS, y= log(n))) +
+    geom_bar(stat = 'identity', fill = 'darkred') +
+    labs(x = 'Fire size (acres)', y = 'Log Number of fires', title = 'Number of big Wildfires by Size Class')
+
+```
+
+```{r}
+## Total Area Burned By Year ##
+
+AreaBurned  <- FiresDF %>% 
+    group_by(FIRE_YEAR) %>%
+    summarise(Area = sum(FIRE_SIZE)) 
+
+AreaBurned %>%
+ggplot(aes(x = FIRE_YEAR, y= Area)) +
+    geom_bar(stat = 'identity', fill = 'DarkRed') +
+    labs(x = 'Year', y = 'Area Burned (acres)', title = 'Total Area  Burned by Year') +
+    geom_smooth(method = 'lm', se = FALSE, linetype = 'dashed', size = 0.4, color = 'black')
+
+```
+
+```{r}
+## Total Area Burned By Big Fires by Year ##
+
+AreaBurnedBig  <- BigFiresDF %>% 
+    group_by(FIRE_YEAR) %>%
+    summarise(Area = sum(FIRE_SIZE)) 
+
+AreaBurnedBig %>%
+ggplot(aes(x = FIRE_YEAR, y= Area/1000)) +
+    geom_bar(stat = 'identity', fill = 'darkred') +
+    labs(y = 'Area Burned (Thousands of Acres)', title = 'Total Area  Burned by Big Fires by Year') +
+    geom_smooth(method = 'lm', se = FALSE, linetype = 'dashed', size = 0.4, color = 'black')
+
+```
+
+```{r}
+## Average Burn Time by Year ##
+
+BurnTime <- FiresDF %>% 
+    group_by(FIRE_YEAR) %>%
+    summarise(Burn_Time = sum(BURN_TIME, na.rm = T))
+BurnTime
+
+BurnTime %>%
+ggplot(aes(x = FIRE_YEAR, y= Burn_Time)) +
+    geom_bar(stat = 'identity', fill = 'Orange') +
+    labs(x = 'Year', y = 'Aggregated Burn Time', title = 'Total Burn Time by Year') +
+  geom_smooth(method = 'lm', se = FALSE, linetype = 'dashed', size = 0.4, color = 'black')
+
+```
+
+```{r}
+## Total Big Fire Burn Time by Year ##
+
+BurnTimeBig <- BigFiresDF %>% 
+    group_by(FIRE_YEAR) %>%
+    summarise(Burn_Time = sum(BURN_TIME, na.rm = T))
+
+BurnTimeBig %>%
+ggplot(aes(x = FIRE_YEAR, y= Burn_Time)) +
+    geom_bar(stat = 'identity', fill = 'darkred') +
+    labs(x = 'Year', y = 'Aggregated Burn Time', title = 'Total Big Fire Burn Time by Year') +
+    geom_smooth(method = 'lm', se = FALSE, linetype = 'dashed', size = 0.4, color = 'black')
+
+```
+
+```{r}
+
+AreaBurnedbyOwner  <- FiresDF %>% 
+    group_by(OWNER_DESCR) %>%
+    summarise(Area = sum(FIRE_SIZE)) 
+AreaBurnedbyOwner
+
+ggplot(AreaBurnedbyOwner, aes(x=OWNER_DESCR, y= Area)) + geom_bar(stat = "Identity", fill = "orange") + coord_flip() + labs(x = 'Owner', y = 'Total Area Burned', title = 'Total Area Burned By Owner')
+
+```
+
+```{r}
+
+AreaBurnedbyOwnerBig  <- BigFiresDF %>% 
+    group_by(OWNER_DESCR) %>%
+    summarise(Area = sum(FIRE_SIZE)) 
+
+ggplot(AreaBurnedbyOwnerBig, aes(x=OWNER_DESCR, y= Area)) + geom_bar(stat = "Identity", fill = "darkred") + coord_flip() + labs(x = 'Owner', y = 'Total Area Burned', title = 'Total Area Burned By Big Fires By Owner')
+
+```
+
+
+```{r}
+
+AreaBurnedbyCause  <- FiresDF %>% 
+    group_by(STAT_CAUSE_DESCR) %>%
+    summarise(Area = sum(FIRE_SIZE)) 
+AreaBurnedbyCause
+
+ggplot(AreaBurnedbyCause, aes(x=STAT_CAUSE_DESCR, y= Area)) + geom_bar(stat = "Identity", fill = "darkred") + coord_flip() + labs(x = 'Cause', y = 'Total Area Burned', title = 'Total Area Burned By Cause')
+
+```
+
+
+```{r}
+
+AreaBurnedbyCauseBig  <- BigFiresDF %>% 
+    group_by(STAT_CAUSE_DESCR) %>%
+    summarise(Area = sum(FIRE_SIZE)) 
+
+ggplot(AreaBurnedbyCauseBig, aes(x=STAT_CAUSE_DESCR, y= Area)) + geom_bar(stat = "Identity", fill = "Darkred") + coord_flip() + labs(x = 'Cause', y = 'Total Area Burned', title = 'Total Area Burned By Big Fires By Cause')
+
+```
+
+```{r}
+## Count of Fires By State ##
+
+StateCount <- FiresDF %>%
+  filter(STATE != "DC") %>%
+  filter(STATE != "PR") %>%
+  group_by(STATE) %>%
+  summarise(COUNT = n())
+
+state.abb <- append(state.abb, c("DC", "PR"))
+state.name <- append(state.name, c("District of Columbia", "Puerto Rico"))
+state_map <- map_data('state')
+
+StateCount$region <- map_chr(StateCount$STATE, function(x) { tolower(state.name[grep(x, state.abb)]) })
+
+state_fires <- left_join(x = state_map,
+                        y = StateCount,
+                        by = "region")
+
+ggplot(data = state_fires) +
+  geom_polygon(aes(x = long, y = lat, fill = COUNT,
+                   group = group),
+               color = "white") +
+  xlab("Latitude") + ylab("Longitude") + ggtitle("Total Fires by State") +
+  coord_fixed(1.3) +
+  scale_fill_continuous(name = "Total Fires", low = "orange", high = "darkred")
+
+```
+
+```{r}
+## Count of Fires By State ##
+
+StateCountBig <- BigFiresDF %>%
+  filter(STATE != "DC") %>%
+  filter(STATE != "PR") %>%
+  group_by(STATE) %>%
+  summarise(COUNT = n())
+
+state.abb <- append(state.abb, c("DC", "PR"))
+state.name <- append(state.name, c("District of Columbia", "Puerto Rico"))
+state_map <- map_data('state')
+
+StateCountBig$region <- map_chr(StateCountBig$STATE, function(x) { tolower(state.name[grep(x, state.abb)]) })
+
+state_firesBig <- left_join(x = state_map,
+                        y = StateCountBig,
+                        by = "region")
+
+ggplot(data = state_firesBig) +
+  geom_polygon(aes(x = long, y = lat, fill = COUNT,
+                   group = group),
+               color = "white") +
+  xlab("Latitude") + ylab("Longitude") + ggtitle("Total Big Fires by State") +
+  coord_fixed(1.3) +
+  scale_fill_continuous(name = "Total Big Fires", low = "orange", high = "darkred")
+
+```
+
+```{r}
+## Fires By State, Normalised by Size ##
+
+library(datasets)
+library(mapproj)
+
+state.x77 <- state.x77 %>%
+    as.data.frame() %>%
+    mutate(region = tolower(rownames(state.x77)))
+
+state.x77$region <- map_chr(StateCount$STATE, function(x) { tolower(state.name[grep(x, state.abb)]) })
+
+state_fires_byarea <- left_join(x = state_map,
+                        y = StateCount,
+                        by = "region")
+
+state_fires_byarea <- left_join(x = state_fires_byarea,
+                        y = state.x77,
+                        by = "region")
+
+ggplot(data = state_fires_byarea) +
+  geom_polygon(aes(x = long, y = lat, fill = COUNT/Area,
+                   group = group),
+               color = "white") +
+  xlab("Latitude") + ylab("Longitude") + ggtitle("Fires per Square Mile by State") +
+  coord_fixed(1.3) +
+  scale_fill_continuous(name = "Fires per sqm", low = "orange", high = "darkred")
+
+```
+
+```{r}
+## Big Fires By State, Normalised by Size ##
+
+library(datasets)
+library(mapproj)
+
+state.x77 <- state.x77 %>%
+    as.data.frame() %>%
+    mutate(region = tolower(rownames(state.x77)))
+
+state.x77$region <- map_chr(StateCountBig$STATE, function(x) { tolower(state.name[grep(x, state.abb)]) })
+
+state_fires_byareaBig <- left_join(x = state_map,
+                        y = StateCountBig,
+                        by = "region")
+
+state_fires_byareaBig <- left_join(x = state_fires_byareaBig,
+                        y = state.x77,
+                        by = "region")
+
+ggplot(data = state_fires_byareaBig) +
+  geom_polygon(aes(x = long, y = lat, fill = COUNT/Area,
+                   group = group),
+               color = "white") +
+  xlab("Latitude") + ylab("Longitude") + ggtitle("Big Fires per Square Mile by State") +
+  coord_fixed(1.3) +
+  scale_fill_continuous(name = "Big Fires per sqm", low = "orange", high = "darkred")
+
+```
+
+```{r}
+## Average Burn Time by State ##
+
+AvgBurnTime <- FiresDF %>% 
+    group_by(STATE) %>%
+    filter(STATE != "DC") %>%
+    filter(STATE != "PR") %>%
+    summarise(Burn_Time = mean(BURN_TIME, na.rm = T))
+
+AvgBurnTime$region <- map_chr(AvgBurnTime$STATE, function(x) { tolower(state.name[grep(x, state.abb)]) })
+
+state.x77 <- state.x77 %>%
+    as.data.frame() %>%
+    mutate(region = tolower(rownames(state.x77)))
+
+state.x77$region <- map_chr(AvgBurnTime$STATE, function(x) { tolower(state.name[grep(x, state.abb)]) })
+
+AverageBurnState <- left_join(x = state_map,
+                        y = AvgBurnTime,
+                        by = "region")
+
+AverageBurnState <- left_join(x = AverageBurnState,
+                        y = state.x77,
+                        by = "region")
+
+ggplot(data = AverageBurnState) +
+  geom_polygon(aes(x = long, y = lat, fill = Burn_Time,
+                   group = group),
+               color = "white") +
+  xlab("Latitude") + ylab("Longitude") + ggtitle("Average Burn Time by State") +
+  coord_fixed(1.3) +
+  scale_fill_continuous(name = "Average Burn Time (Days)", low = "orange", high = "darkred")
+
+```
+
+```{r}
+## Big Fire Average Burn Time by State ##
+
+AvgBurnTimeBig <- BigFiresDF %>% 
+    group_by(STATE) %>%
+    filter(STATE != "DC") %>%
+    filter(STATE != "PR") %>%
+    summarise(Burn_Time = mean(BURN_TIME, na.rm = T))
+
+AvgBurnTimeBig$region <- map_chr(AvgBurnTimeBig$STATE, function(x) { tolower(state.name[grep(x, state.abb)]) })
+
+state.x77 <- state.x77 %>%
+    as.data.frame() %>%
+    mutate(region = tolower(rownames(state.x77)))
+
+state.x77$region <- map_chr(AvgBurnTimeBig$STATE, function(x) { tolower(state.name[grep(x, state.abb)]) })
+
+AverageBurnStateBig <- left_join(x = state_map,
+                        y = AvgBurnTimeBig,
+                        by = "region")
+
+AverageBurnStateBig <- left_join(x = AverageBurnStateBig,
+                        y = state.x77,
+                        by = "region")
+
+ggplot(data = AverageBurnStateBig) +
+  geom_polygon(aes(x = long, y = lat, fill = Burn_Time,
+                   group = group),
+               color = "white") +
+  xlab("Latitude") + ylab("Longitude") + ggtitle("Big Fire Average Burn Time by State") +
+  coord_fixed(1.3) +
+  scale_fill_continuous(name = "Average Burn Time (Days)", low = "orange", high = "darkred")
+
+```
+
+
+```{r}
+## log(Burn Time) by Cause ##
+
+ggplot(FiresDF, aes(x=STAT_CAUSE_DESCR, y=log(BURN_TIME))) +  geom_violin(fill = "orange") + coord_flip() + labs(x = 'Cause', y = 'Log of Burn Time', title = 'Burn Time by Cause')
+
+```
+
+
+```{r}
+## Big Fire log(Burn Time) by Cause ##
+
+ggplot(BigFiresDF, aes(x=STAT_CAUSE_DESCR, y=log(BURN_TIME))) +  geom_violin(fill = "darkred") + coord_flip() + labs(x = 'Cause', y = 'Log of Burn Time', title = 'Big Fire Burn Time by Cause')
+
+```
+
+
+```{r}
+## log(Burn Time) by Owner ##
+
+ggplot(FiresDF, aes(x=OWNER_DESCR, y=log(BURN_TIME))) +  geom_violin(fill = "orange") + coord_flip() + labs(x = 'Owner', y = 'Log of Burn Time', title = 'Burn Time by Owner')
+
+```
+
+```{r}
+##  Big Fire log(Burn Time) by Owner ##
+
+ggplot(BigFiresDF, aes(x=OWNER_DESCR, y=log(BURN_TIME))) +  geom_violin(fill = "darkred") + coord_flip() + labs(x = 'Owner', y = 'Log of Burn Time', title = 'Big FireBurn Time by Owner')
+
+```
+
+
+```{r}
+## log(Burn Size) by Owner ##
+
+ggplot(FiresDF, aes(x=OWNER_DESCR, y= log(FIRE_SIZE))) +  geom_violin(fill = "orange") + coord_flip() + labs(x = 'Owner', y = 'Log of Burn Size (Acres)', title = 'Burn Size by Owner')
+
+```
+
+
+```{r}
+## Big Fire log(Burn Size) by Owner ##
+
+ggplot(BigFiresDF, aes(x=OWNER_DESCR, y= log(FIRE_SIZE))) +  geom_violin(fill = "darkred") + coord_flip() + labs(x = 'Owner', y = 'Log of Burn Size (Acres)', title = 'Big Fire Burn Size by Owner')
+
+```
+
+
+```{r}
+## log(Burn Size) by Cause ##
+
+ggplot(FiresDF, aes(x=STAT_CAUSE_DESCR, y= log(FIRE_SIZE))) +  geom_violin(fill = "orange") + coord_flip() + labs(x = 'Cause', y = 'Log of Burn Size (Acres)', title = 'Burn Size by Cause')
+
+```
+
+
+```{r}
+## Big Fire log(Burn Size) by Cause ##
+
+ggplot(BigFiresDF, aes(x=STAT_CAUSE_DESCR, y= log(FIRE_SIZE))) +  geom_violin(fill = "darkred") + coord_flip() + labs(x = 'Cause', y = 'Log of Burn Size (Acres)', title = 'Big Fire Burn Size by Cause')
+
+```
+
+
+```{r}
+## Fire log(Burn Size) by Human or Not ##
+
+ggplot(FiresDF, aes(x=HUMAN_CAUSE, y= log(FIRE_SIZE))) +  geom_violin(fill = "darkred") + coord_flip() + labs(x = 'Human Cause', y = 'Log of Burn Size (Acres)', title = 'Fire Burn Size by Cause')
+
+```
+
+```{r}
+## Fire log(Burn Size) by Human or Not ##
+
+ggplot(FiresDF, aes(x=HUMAN_CAUSE, y= log(FIRE_SIZE))) +  geom_boxplot(fill = 'darkorange') + labs(x = 'Human Cause', y = 'Log of Burn Size (Acres)', title = 'Fire Burn Size by Cause')
+
+```
+
+```{r}
+## Fire log(Burn Time) by Human or Not ##
+
+ggplot(BigFiresDF, aes(x=HUMAN_CAUSE, y= log(BURN_TIME))) +  geom_violin(fill = "darkred") + coord_flip() + labs(x = 'Human Cause', y = 'Log of Burn Time', title = 'Fire Burn Time by Cause')
+
+```
+
+## Time to do Some Modelling ##
+
+```{r}
+
+## Trimming the Data ##
+
+# Remove unknown fire cause from the DF ##
+noUnknown <- FiresDF %>%
+  filter(STAT_CAUSE_CODE != 13)
+
+## Trim the data of gratuitous variables for Lasso so it can compute across large number of observations ##
+
+FireLasso <- subset(noUnknown, select = -c(FPA_ID, SOURCE_SYSTEM_TYPE, SOURCE_SYSTEM, SOURCE_REPORTING_UNIT_NAME,  LOCAL_INCIDENT_ID, FIRE_CODE, FIRE_NAME, ICS_209_INCIDENT_NUMBER, ICS_209_NAME, MTBS_ID, MTBS_FIRE_NAME, COMPLEX_NAME, OWNER_DESCR, Shape, FIPS_CODE, FIPS_NAME, NWCG_REPORTING_AGENCY, NWCG_REPORTING_UNIT_ID, NWCG_REPORTING_UNIT_NAME, FIRE_SIZE_CLASS, OBJECTID, FOD_ID, SOURCE_REPORTING_UNIT, LOCAL_FIRE_REPORT_ID, CONT_DATE, DISCOVERY_DATE, COUNTY, CONT_DOY, LATITUDE, LONGITUDE, DISCOVERY_TIME, CONT_TIME, STAT_CAUSE_CODE, STAT_CAUSE_DESCR))
+
+```
+
+
+```{r}
+## Splitting Data ##
+
+set.seed(2020)
+
+ndataF <- nrow(FireLasso)
+indexF <-(sample(1:ndataF, size = 0.4*ndataF))
+
+FireLasso2 <- FireLasso[indexF,]
+FireLasso2 <- na.omit(FireLasso2)
+
+```
+
+
+```{r}
+## Developing the Lasso to identify variables for predictive modeling ##
+
+MxF <- model.matrix(HUMAN_CAUSE ~ ., data = FireLasso2)[,-1]
+FireLasso2 <- na.omit(FireLasso2)
+MyF <- (FireLasso2$HUMAN_CAUSE == 1)
+MyF <- sapply(MyF, as.numeric)
+
+
+num.featuresF <- ncol(MxF)
+num.nF <- nrow(MxF)
+num.defaultF <- sum(MyF)
+wF <- (num.defaultF/num.nF)*(1-(num.defaultF/num.nF))
+
+lambda.theoryF <- sqrt(wF*log(num.featuresF/0.05)/num.nF)
+
+lassoTheoryF <- glmnet(MxF,MyF, family="binomial",lambda = lambda.theoryF)
+
+summary(lassoTheoryF)
+
+
+## Identified Variables ##
+
+support(lassoTheoryF$beta)
+colnames(MxF)[support(lassoTheoryF$beta)]
+length(support(lassoTheoryF$beta))
+
+LassoVariables <- colnames(MxF)[support(lassoTheoryF$beta)]
+
+```
+
+```{r}
+## Running the Lasso Model ##
+lassoF <- glmnet(MxF,MyF, family="binomial")
+summary(lassoF)
+
+
+par(mar=c(1.5,1.5,0.75,1.5))
+par(mai=c(1.5,1.5,0.75,1.5))
+
+par(mfrow=c(1,2))
+coef_ind <- 5
+par(mar=c(1.5,0.5,0.75,0.5))
+par(mai=c(1.5,0.5,0.75,0.5))
+plot(log(lassoF$lambda),lassoF$beta[coef_ind,], ylab="Coefficient value", main=paste("Coefficient for",colnames(MxF)[coef_ind]),xlab = expression(paste("log(",lambda,")")),type="l")
+coef_ind <- 2
+par(mar=c(1.5,0.5,0.75,0.5))
+par(mai=c(1.5,0.5,0.75,0.5))
+
+
+par(mfrow=c(1,1))
+par(mar=c(1.5,1.5,1.5,1.5))
+par(mai=c(1.5,1.5,1.5,1.5))
+
+## This one takes an age to run... ##
+lassoCVF <- cv.glmnet(MxF,MyF, family="binomial")
+
+## This generates the min Lambda value ##
+lassoCVF$lambda[which.min(lassoCVF$cvm)]
+
+```
+
+
+```{r}
+## Plotting the Lasso ##
+
+plot(log(lassoF$lambda),lassoF$beta[coef_ind,], ylab="Coefficient value", main=paste("Coefficient for",colnames(MxF)[coef_ind]),xlab = expression(paste("log(",lambda,")")),type="l")
+
+plot(lassoF, xvar="lambda", main="# of non-zero coefficients", ylab ="Coefficient values", xlab = expression(paste("log(",lambda,")")))
+
+par(mar=c(1.5,1.5,2,1.5))
+par(mai=c(1.5,1.5,2,1.5))
+plot(lassoCVF, main="Fitting Graph for CV Lasso \n \n # of non-zero coefficients  ", xlab = expression(paste("log(",lambda,")")))
+
+
+text(log(lassoCVF$lambda.min), .95,"min",cex=1)
+text(log(lassoCVF$lambda.1se), 1,"1se",cex=1)
+
+lines(c(log(lambda.theoryF),log(lambda.theoryF)),c(0.3,2.4),lty=3,col="blue")
+text(log(lambda.theoryF), 1.05,"theory",cex=1)
+
+```
+
+## Predictive Models
+
+```{r}
+## Split Data into Train and Test (80:20)
+
+set.seed(3030)
+
+ndataT <- nrow(noUnknown)
+indexT <-(sample(1:ndataT, size = 0.2*ndataT))
+
+TestData <- noUnknown[indexT,]
+TrainData <- noUnknown[-indexT,]
+
+```
+
+
+```{r}
+## Classification Tree
+CauseTree <- tree(HUMAN_CAUSE ~ DISCOVERY_HOUR + CONT_HOUR + BURN_TIME + FIRE_SIZE + STATE, TrainData)
+
+plot(CauseTree)
+text(CauseTree)
+
+```
+
+
+```{r}
+## Logistic Regression Model Based on Lasso Variables ##
+
+LogModel1 <-  glm(HUMAN_CAUSE ~ BURN_TIME + DISCOVERY_HOUR + BIG_FIRE + FIRE_SIZE + factor(STATE) + FIRE_YEAR + DISCOVERY_DOY + BIG_FIRE , data = TrainData, family = "binomial")
+
+summary(LogModel1)
+
+```
+
+
+```{r}
+## Random Forest Model based on Lasso Variables ##
+
+RFData <- subset(noUnknown, select = c(HUMAN_CAUSE, BIG_FIRE, FIRE_SIZE, STATE, DISCOVERY_HOUR, CONT_HOUR, FIRE_YEAR, DISCOVERY_DOY))
+RFData <- na.exclude(RFData)
+
+ndataRF <- nrow(RFData)
+indexRF <-(sample(1:ndataRF, size = 0.2*ndataRF))
+
+RFTestData <- RFData[indexRF,]
+RFTrainData <- RFData[-indexRF,]
+
+memory.limit(50000)
+RFmodel <- randomForest(HUMAN_CAUSE ~ BIG_FIRE + FIRE_SIZE + STATE + DISCOVERY_HOUR + CONT_HOUR + FIRE_YEAR + DISCOVERY_DOY, data = RFTrainData, nodesize = 5, ntree = 300, mtry = 3)
+ RFmodel
+
+
+```
+
+
+```{r}
+## Doing Some Predictions RF Model##
+
+predictions <- as.data.frame(predict(RFmodel, RFTestData, type = "prob"))
+
+predictions$predict <- names(predictions)[1:2][apply(predictions[,1:2], 1, which.max)]
+predictions$observed <- RFTestData$HUMAN_CAUSE
+
+predictions
+
+## ROC and AUC for RF Model ##
+
+roc.RF <- roc(ifelse(predictions$observed=="1", "1", "0"), as.numeric(predictions[,2]))
+plot(roc.RF, print.auc = TRUE)
+
+
+```
+
+
+```{r}
+## OOS Predictions  for Log Model ##
+
+LogOOSPred <- predict(LogModel1, TestData, type = "response")
+
+Log_actuals_predicts <- data.frame(cbind(actuals = TestData$HUMAN_CAUSE), LogOOSPred = (as.integer(exp(LogOOSPred))))
+Log_actuals_predicts <- na.exclude(Log_actuals_predicts)
+
+Log_actuals_predicts
+
+Log_correlation_accuracy <- cor(Log_actuals_predicts)
+Log_correlation_accuracy
+
+Log_min_max_accuracy <- mean(apply(Log_actuals_predicts, 1, min)/ apply(Log_actuals_predicts, 1, max))
+Log_min_max_accuracy
+
+## ROC and AUC for Log Model ##
+
+Log_roc <- roc(HUMAN_CAUSE ~ LogOOSPred, TestData)
+plot(Log_roc, print.auc =TRUE)
+
+
+```
+
+
+
+
